@@ -4,7 +4,6 @@ Luminor pension funds scraper.
 Extracts II pillar fund data from a simple static table.
 """
 import re
-import re
 import sys
 from pathlib import Path
 
@@ -48,16 +47,23 @@ class LuminorPensionsScraper(BaseScraper):
         results = []
 
         page.wait_for_load_state("domcontentloaded")
-        page.wait_for_timeout(2000)
         self.dismiss_cookie_modal(page)
+
+        # Luminor table can render asynchronously; wait for table cells instead of fixed sleeps.
+        try:
+            page.wait_for_selector("table td", timeout=30000)
+        except Exception:
+            # Retry once after an extra short wait in case cookie/UI overlays delayed rendering.
+            page.wait_for_timeout(2000)
+            page.wait_for_selector("table td", timeout=30000)
 
         # Extract date shown above the table
         data_date = None
         try:
             body = page.inner_text("body")
-            m = re.search(r"Vieneto verčių data[:\s]+(\d{4}-\d{2}-\d{2})", body)
+            m = re.search(r"Vieneto verčių data[:\s]+(\d{4})[.-](\d{2})[.-](\d{2})", body)
             if m:
-                data_date = m.group(1)
+                data_date = f"{m.group(1)}-{m.group(2)}-{m.group(3)}"
         except Exception:
             pass
 

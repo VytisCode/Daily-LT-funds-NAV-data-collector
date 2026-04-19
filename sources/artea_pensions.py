@@ -90,7 +90,7 @@ class ArteaPensionsScraper(BaseScraper):
     def open_fund_selector(self, page):
         """Open the first combobox, which is the fund chooser."""
         opener = page.locator(".custom-select-opener[role='combobox']").first
-        opener.click(timeout=10000)
+        opener.click(timeout=30000)
         page.wait_for_timeout(450)
 
     def discover_fund_names(self, page) -> list:

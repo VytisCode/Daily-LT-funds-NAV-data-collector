@@ -42,7 +42,7 @@ class GoindexPensionsScraper(BaseScraper):
         results = []
 
         page.wait_for_load_state("domcontentloaded")
-        page.wait_for_timeout(2000)
+        page.wait_for_selector("table", timeout=30000)
         self.dismiss_cookie_modal(page)
 
         # Date is shown as "Data: 2026.04.16"
