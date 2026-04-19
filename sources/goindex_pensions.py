@@ -39,6 +39,27 @@ class GoindexPensionsScraper(BaseScraper):
                 pass
         page.wait_for_timeout(500)
 
+    def wait_for_metrics_ready(self, page, timeout_ms: int = 20000) -> None:
+        """Wait until numeric metric columns are populated in table rows."""
+        deadline = page.evaluate("Date.now()") + timeout_ms
+        while page.evaluate("Date.now()") < deadline:
+            try:
+                rows = page.query_selector_all("table tr")
+                if len(rows) >= 2:
+                    cells = rows[1].query_selector_all("td")
+                    # Unit value (6) and net assets (7) should be non-empty when data is ready.
+                    if len(cells) >= 8:
+                        unit_value = cells[6].inner_text().strip()
+                        net_assets = cells[7].inner_text().strip()
+                        if unit_value and net_assets:
+                            return
+            except Exception:
+                pass
+
+            # Consent banner can reappear; attempt dismissal again while waiting.
+            self.dismiss_cookie_modal(page)
+            page.wait_for_timeout(500)
+
     def scrape_data(self, page) -> list:
         results = []
 
@@ -63,6 +84,8 @@ class GoindexPensionsScraper(BaseScraper):
                     break
 
             if target_table:
+                # Wait until numeric columns are hydrated before parsing rows.
+                self.wait_for_metrics_ready(page)
                 break
 
             if attempt < 3:
