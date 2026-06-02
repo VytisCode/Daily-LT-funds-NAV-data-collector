@@ -74,20 +74,26 @@ class ArteaPensionsScraper(BaseScraper):
         selectors = [
             "button:has-text('Leisti visus')",
             "button:has-text('Allow All')",
-            "#onetrust-accept-btn-handler",
+            "button:has-text('Accept all')",
+            "button:has-text('Sutinku')",
+            "button:has-text('Priimti')",
             "button:has-text('Patvirt')",  # Patvirtinti...
+            "#onetrust-accept-btn-handler",
             "#onetrust-reject-all-handler",
+            "button[id*='accept']",
+            "button[name*='accept']",
             "button:has-text('Uždaryti')",
             ".onetrust-close-btn-handler",
+            ".onetrust-button-group button",
         ]
 
-        for attempt in range(2):
+        for attempt in range(3):
             for selector in selectors:
                 try:
                     btn = page.locator(selector).first
                     if btn.count() > 0:
-                        btn.click(timeout=2000, force=True)
-                        page.wait_for_timeout(300)
+                        btn.click(timeout=3000, force=True)
+                        page.wait_for_timeout(500)
                         # Check if modal overlay is gone
                         try:
                             page.wait_for_selector(".onetrust-pc-dark-filter", state="hidden", timeout=2000)
@@ -100,9 +106,20 @@ class ArteaPensionsScraper(BaseScraper):
             # If first pass failed, try using evaluate to click the button directly
             try:
                 result = page.evaluate("""() => {
-                    const btn = document.querySelector("button[id*='onetrust'][id*='accept']") ||
-                               Array.from(document.querySelectorAll('button'))
-                                 .find(b => b.innerText.includes('Leisti') || b.innerText.includes('Allow'));
+                    const accepted = [
+                        'leisti visus',
+                        'allow all',
+                        'accept all',
+                        'sutinku',
+                        'priimti',
+                        'patvirt',
+                        'accept'
+                    ];
+                    const buttons = Array.from(document.querySelectorAll('button'));
+                    const btn = buttons.find(b => {
+                        const text = (b.innerText || '').toLowerCase();
+                        return accepted.some(term => text.includes(term));
+                    }) || document.querySelector("button[id*='accept']") || document.querySelector("button[name*='accept']");
                     if (btn) {
                         btn.click();
                         return true;
