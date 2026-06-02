@@ -8,6 +8,7 @@ import pandas as pd
 from datetime import datetime
 from pathlib import Path
 import sys
+import re
 from abc import ABC, abstractmethod
 
 
@@ -23,7 +24,9 @@ class BaseScraper(ABC):
         """
         self.source_name = source_name
         self.results = []
+        self._playwright = None
         self.browser = None
+        self.context = None
         self.page = None
     
     @abstractmethod
@@ -47,15 +50,50 @@ class BaseScraper(ABC):
     def setup_browser(self):
         """Initialize browser and page."""
         print("Starting browser...")
-        p = sync_playwright().start()
-        self.browser = p.chromium.launch(headless=True)
-        self.page = self.browser.new_page()
+        self._playwright = sync_playwright().start()
+        self.browser = self._playwright.chromium.launch(headless=True)
+        self.context = self.browser.new_context()
+        self.page = self.context.new_page()
+        self.page.set_default_timeout(45000)
         return self.page
     
     def cleanup_browser(self):
         """Close browser if open."""
+        if self.page:
+            try:
+                self.page.close()
+            except Exception:
+                pass
+        if self.context:
+            try:
+                self.context.close()
+            except Exception:
+                pass
         if self.browser:
-            self.browser.close()
+            try:
+                self.browser.close()
+            except Exception:
+                pass
+        if self._playwright:
+            try:
+                self._playwright.stop()
+            except Exception:
+                pass
+
+    def _extract_data_date(self, df: pd.DataFrame) -> str:
+        """Extract a normalized YYYY-MM-DD date from Data/Date columns when possible."""
+        candidate_columns = [col for col in ("Data", "Date") if col in df.columns]
+        for column in candidate_columns:
+            values = []
+            for raw in df[column].dropna().astype(str):
+                normalized = re.sub(r"[\s/.]", "-", raw.strip())
+                match = re.search(r"\b\d{4}-\d{2}-\d{2}\b", normalized)
+                if match:
+                    values.append(match.group(0))
+            if values:
+                # Pick latest valid date string for deterministic output naming.
+                return max(values)
+        return datetime.today().strftime('%Y-%m-%d')
     
     def save_to_excel(self, df: pd.DataFrame, filename: str) -> str:
         """
@@ -90,7 +128,7 @@ class BaseScraper(ABC):
             # Scrape
             url = self.get_url()
             print(f"Opening: {url}")
-            self.page.goto(url, timeout=60000)
+            self.page.goto(url, wait_until="domcontentloaded", timeout=90000)
             
             self.results = self.scrape_data(self.page)
             
@@ -105,15 +143,7 @@ class BaseScraper(ABC):
                 print(f"No data parsed for {self.source_name}.")
                 return None
             
-            # Use data date from the 'Data' column if available, otherwise today's date
-            if 'Data' in df.columns:
-                unique_dates = df['Data'].dropna().unique()
-                if len(unique_dates) == 1 and unique_dates[0]:
-                    data_date = unique_dates[0]
-                else:
-                    data_date = datetime.today().strftime('%Y-%m-%d')
-            else:
-                data_date = datetime.today().strftime('%Y-%m-%d')
+            data_date = self._extract_data_date(df)
             
             filename = f"{self.source_name}_data_{data_date}.xlsx"
             

@@ -6,11 +6,15 @@ from datetime import datetime
 from pathlib import Path
 import subprocess
 import sys
+import os
 
 BASE_DIR = Path(__file__).resolve().parent
 DEFAULT_PYTHON = BASE_DIR / ".venv" / "bin" / "python3"
 LOG_DIR = BASE_DIR / "logs"
 SOURCES_DIR = BASE_DIR / "sources"
+STEP_TIMEOUT_SECONDS = int(os.getenv("PIPELINE_STEP_TIMEOUT_SECONDS", "420"))
+SCRAPER_RETRIES = int(os.getenv("PIPELINE_SCRAPER_RETRIES", "1"))
+STRICT_FAILURE_MODE = os.getenv("PIPELINE_STRICT_FAILURE", "0") == "1"
 
 
 def get_python_executable():
@@ -43,7 +47,7 @@ def discover_scrapers():
     return scrapers
 
 
-def run_step(script_path):
+def run_step(script_path, timeout_seconds=STEP_TIMEOUT_SECONDS, retries=0):
     """
     Run a single script/scraper with a timeout.
     
@@ -54,16 +58,21 @@ def run_step(script_path):
         True if the step completed successfully, False otherwise.
     """
     command = [str(get_python_executable()), str(script_path)]
-    print(f"\n=== Running {script_path.name} ===")
-    try:
-        result = subprocess.run(command, cwd=BASE_DIR, check=False, timeout=180)
-        if result.returncode != 0:
+    attempts = retries + 1
+    for attempt in range(1, attempts + 1):
+        print(f"\n=== Running {script_path.name} (attempt {attempt}/{attempts}) ===")
+        try:
+            result = subprocess.run(command, cwd=BASE_DIR, check=False, timeout=timeout_seconds)
+            if result.returncode == 0:
+                return True
             print(f"{script_path.name} failed with exit code {result.returncode}")
-            return False
-        return True
-    except subprocess.TimeoutExpired:
-        print(f"{script_path.name} timed out after 180 seconds")
-        return False
+        except subprocess.TimeoutExpired:
+            print(f"{script_path.name} timed out after {timeout_seconds} seconds")
+
+        if attempt < attempts:
+            print(f"Retrying {script_path.name}...")
+
+    return False
 
 
 def main():
@@ -84,7 +93,7 @@ def main():
     else:
         print(f"Found {len(scrapers)} scraper(s): {', '.join(s.name for s in scrapers)}")
         for scraper_path in scrapers:
-            success = run_step(scraper_path)
+            success = run_step(scraper_path, retries=SCRAPER_RETRIES)
             if not success:
                 failed_scrapers.append(scraper_path.name)
 
@@ -92,7 +101,7 @@ def main():
     print("\n=== Running merge_data.py ===")
     merge_script = BASE_DIR / "merge_data.py"
     if merge_script.exists():
-        merge_success = run_step(merge_script)
+        merge_success = run_step(merge_script, retries=0)
         if not merge_success:
             print("Merge step failed. Skipping email sending.")
             if failed_scrapers:
@@ -105,7 +114,7 @@ def main():
     print("\n=== Running send_email.py ===")
     email_script = BASE_DIR / "send_email.py"
     if email_script.exists():
-        email_success = run_step(email_script)
+        email_success = run_step(email_script, retries=0)
         if not email_success:
             print("Email step failed.")
             if failed_scrapers:
@@ -116,7 +125,11 @@ def main():
 
     if failed_scrapers:
         print(f"Workflow completed with failures in: {', '.join(failed_scrapers)}")
-        sys.exit(1)
+        if STRICT_FAILURE_MODE:
+            print("Strict mode enabled: exiting with error because at least one scraper failed.")
+            sys.exit(1)
+        print("Strict mode disabled: report sent using latest available data from each source.")
+        sys.exit(0)
 
     print(f"Workflow completed at {datetime.now().isoformat(timespec='seconds')}")
 

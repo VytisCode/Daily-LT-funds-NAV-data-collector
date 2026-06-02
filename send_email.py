@@ -53,6 +53,7 @@ def get_latest_excel_file():
 def send_email():
     """Send the Excel file via Gmail."""
     excel_file, data_date = get_latest_excel_file()
+    recipients = [addr.strip() for addr in (RECIPIENT_EMAIL or "").split(",") if addr.strip()]
     
     # Validate inputs
     if not GMAIL_USER:
@@ -68,17 +69,22 @@ def send_email():
     if not excel_file:
         print("Error: no merged Excel file found. Run merge_data.py first.")
         sys.exit(1)
+
+    if not recipients:
+        print("Error: RECIPIENT_EMAIL environment variable not set")
+        print("Set it in .env, for example: RECIPIENT_EMAIL=person@example.com")
+        sys.exit(1)
     
     print(f"Sending {excel_file.name}...")
     print(f"  From: {GMAIL_USER}")
-    print(f"  To: {RECIPIENT_EMAIL.replace(',', ', ')}")
+    print(f"  To: {', '.join(recipients)}")
     print(f"  Data date: {data_date}")
     
     try:
         # Create message
         msg = MIMEMultipart()
         msg["From"] = GMAIL_USER
-        msg["To"] = RECIPIENT_EMAIL
+        msg["To"] = ", ".join(recipients)
         msg["Date"] = formatdate(localtime=True)
         msg["Subject"] = f"LT Pension Fund Data - {data_date}"
         
@@ -105,12 +111,11 @@ Automated Python Script
         
         # Send email
         print("\nConnecting to Gmail SMTP server...")
-        server = smtplib.SMTP_SSL("smtp.gmail.com", 465)
-        server.login(GMAIL_USER, GMAIL_PASSWORD)
-        server.send_message(msg)
-        server.quit()
+        with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
+            server.login(GMAIL_USER, GMAIL_PASSWORD)
+            server.send_message(msg, to_addrs=recipients)
         
-        print(f"✅ Email sent successfully to {RECIPIENT_EMAIL.replace(',', ', ')}")
+        print(f"✅ Email sent successfully to {', '.join(recipients)}")
         
     except smtplib.SMTPAuthenticationError:
         print("❌ Error: Gmail login failed. Check your credentials.")

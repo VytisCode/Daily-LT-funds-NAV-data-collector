@@ -16,6 +16,19 @@ from openpyxl.styles import Alignment, Font
 
 
 DATE_RE = re.compile(r"(\d{4}-\d{2}-\d{2})")
+FUND_AGE_BUCKETS = [
+    "2003-2009",
+    "1996-2002",
+    "1989-1995",
+    "1982-1988",
+    "1975-1981",
+    "1968-1974",
+    "1961-1967",
+    "1954-1960",
+]
+PROVIDER_ORDER = ["allianz", "artea", "goindex", "luminor", "seb", "swedbank"]
+PROVIDER_ORDER_MAP = {name: idx for idx, name in enumerate(PROVIDER_ORDER)}
+FUND_BUCKET_MAP = {bucket: idx for idx, bucket in enumerate(FUND_AGE_BUCKETS)}
 
 
 def parse_source_and_date(filename: str):
@@ -32,9 +45,47 @@ def parse_source_and_date(filename: str):
     return source_name, file_date
 
 
+def parse_iso_date(value: str):
+    if not value:
+        return None
+    try:
+        return datetime.strptime(value, "%Y-%m-%d").date()
+    except ValueError:
+        return None
+
+
 def institution_from_source(source_name: str) -> str:
     """Return the institution prefix from a source name (e.g. 'swedbank_pensions' -> 'swedbank')."""
     return source_name.split("_")[0]
+
+
+def normalize_for_matching(text: str) -> str:
+    return (
+        str(text)
+        .lower()
+        .replace("į", "i")
+        .replace("š", "s")
+        .replace("ų", "u")
+        .replace("ū", "u")
+        .replace("ą", "a")
+        .replace("č", "c")
+        .replace("ę", "e")
+        .replace("ė", "e")
+        .replace("ž", "z")
+    )
+
+
+def fund_bucket_order(fund_name: str) -> int:
+    name = normalize_for_matching(fund_name)
+
+    for bucket, order in FUND_BUCKET_MAP.items():
+        if bucket in name:
+            return order
+
+    if "turto issaugojimo" in name or "turto isaugojimo" in name:
+        return len(FUND_AGE_BUCKETS)
+
+    return len(FUND_AGE_BUCKETS) + 1
 
 
 def discover_latest_files_per_source():
@@ -55,14 +106,31 @@ def discover_latest_files_per_source():
         candidates.append(path)
 
     by_source = {}
+    by_source_date = {}
     for path in candidates:
-        source_name, _ = parse_source_and_date(path.name)
+        source_name, file_date = parse_source_and_date(path.name)
         if not source_name:
             continue
 
         current = by_source.get(source_name)
-        if current is None or path.stat().st_mtime > current.stat().st_mtime:
+        current_date = by_source_date.get(source_name)
+        candidate_date = parse_iso_date(file_date)
+
+        should_replace = False
+        if current is None:
+            should_replace = True
+        elif candidate_date and current_date:
+            should_replace = (candidate_date > current_date) or (
+                candidate_date == current_date and path.stat().st_mtime > current.stat().st_mtime
+            )
+        elif candidate_date and not current_date:
+            should_replace = True
+        elif not candidate_date and not current_date:
+            should_replace = path.stat().st_mtime > current.stat().st_mtime
+
+        if should_replace:
             by_source[source_name] = path
+            by_source_date[source_name] = candidate_date
 
     return by_source
 
@@ -98,7 +166,6 @@ def main():
     institution_frames = []
     for institution, info in sorted(by_institution.items()):
         dfs = info["dfs"]
-        file_date = info["file_date"]
 
         if len(dfs) == 1:
             merged = dfs[0].copy()
@@ -106,6 +173,8 @@ def main():
             merged = dfs[0]
             for other in dfs[1:]:
                 merged = merged.merge(other, on="Fund name", how="outer")
+
+        merged["_institution"] = institution
 
         institution_frames.append(merged)
         print(f"  Institution '{institution}': {len(merged)} funds")
@@ -138,9 +207,21 @@ def main():
             df_combined["Grynieji aktyvai"] = df_combined["Grynieji aktyvai"].combine_first(df_combined["Fondo dydis value"])
         df_combined.drop(columns=["Fondo dydis value"], inplace=True)
 
-    # Sort by Fund name for readability
+    # Group equivalent funds together: age bucket first, then provider.
     if "Fund name" in df_combined.columns:
-        df_combined.sort_values("Fund name", ignore_index=True, inplace=True)
+        df_combined["_bucket_order"] = df_combined["Fund name"].apply(fund_bucket_order)
+        df_combined["_provider_order"] = (
+            df_combined.get("_institution", "")
+            .astype(str)
+            .map(PROVIDER_ORDER_MAP)
+            .fillna(len(PROVIDER_ORDER))
+        )
+        df_combined.sort_values(
+            ["_bucket_order", "_provider_order", "Fund name"],
+            ignore_index=True,
+            inplace=True,
+        )
+        df_combined.drop(columns=["_bucket_order", "_provider_order", "_institution"], inplace=True, errors="ignore")
 
     # Normalise Data column to YYYY-MM-DD (replace spaces/slashes with dashes)
     if "Data" in df_combined.columns:
@@ -171,13 +252,19 @@ def main():
 
     print(f"  Combined: {len(df_combined)} rows, {len(df_combined.columns)} columns")
 
-    # Use data date from the combined data for filename
+    # Use latest valid date from combined data for filename; fallback to today.
     if 'Data' in df_combined.columns:
-        unique_dates = df_combined['Data'].dropna().unique()
-        if len(unique_dates) == 1 and unique_dates[0]:
-            data_date = unique_dates[0]
-        else:
-            data_date = datetime.today().strftime("%Y-%m-%d")
+        normalized_dates = (
+            df_combined['Data']
+            .dropna()
+            .astype(str)
+            .str.strip()
+            .str.replace(r"[\s/.]", "-", regex=True)
+            .str.extract(r"(\d{4}-\d{2}-\d{2})", expand=False)
+            .dropna()
+            .tolist()
+        )
+        data_date = max(normalized_dates) if normalized_dates else datetime.today().strftime("%Y-%m-%d")
     else:
         data_date = datetime.today().strftime("%Y-%m-%d")
 

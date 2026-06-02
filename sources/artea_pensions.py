@@ -9,10 +9,9 @@ from pathlib import Path
 
 from playwright.sync_api import sync_playwright
 try:
-    from playwright_stealth import stealth, stealth_sync
+    import playwright_stealth as pw_stealth
 except ImportError:
-    stealth = None
-    stealth_sync = None
+    pw_stealth = None
 
 # Add parent directory to path so we can import base_scraper
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -69,12 +68,9 @@ class ArteaPensionsScraper(BaseScraper):
         self.page.set_default_timeout(45000)
         
         # Apply stealth measures if available
-        if stealth_sync:
-            print("  Applying Playwright stealth_sync measures...")
-            stealth_sync(self.page)
-        elif stealth:
+        if pw_stealth and hasattr(pw_stealth, "Stealth"):
             print("  Applying Playwright stealth measures...")
-            stealth(self.page)
+            pw_stealth.Stealth().apply_stealth_sync(self.page)
         else:
             print("  Warning: playwright-stealth not installed or import failed. Install with: pip install playwright-stealth")
         
@@ -170,7 +166,7 @@ class ArteaPensionsScraper(BaseScraper):
                 print("    ✓ Cloudflare challenge completed")
             except Exception as e:
                 print(f"    ✗ Cloudflare challenge not bypassed: {e}")
-                raise RuntimeError("Cloudflare security challenge could not be bypassed. Try adding playwright-stealth: pip install playwright-stealth")
+                raise RuntimeError("Cloudflare security challenge could not be bypassed in headless mode")
         
         # Step 1: Aggressively dismiss cookie modal
         print("    Dismissing cookie consent modal...")
@@ -349,4 +345,4 @@ class ArteaPensionsScraper(BaseScraper):
 
 if __name__ == "__main__":
     scraper = ArteaPensionsScraper()
-    scraper.run()
+    sys.exit(0 if scraper.run() else 1)

@@ -150,4 +150,4 @@ class GoindexPensionsScraper(BaseScraper):
 
 if __name__ == "__main__":
     scraper = GoindexPensionsScraper()
-    scraper.run()
+    sys.exit(0 if scraper.run() else 1)

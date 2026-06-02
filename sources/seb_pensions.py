@@ -158,4 +158,4 @@ class SEBPensionsScraper(BaseScraper):
 
 if __name__ == "__main__":
     scraper = SEBPensionsScraper()
-    scraper.run()
+    sys.exit(0 if scraper.run() else 1)

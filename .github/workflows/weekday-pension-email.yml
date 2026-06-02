@@ -1,21 +1,31 @@
-name: Weekday Pension Email
+name: Daily Pension Automation
 
 on:
   workflow_dispatch:
   schedule:
-    # Runs at 04:00 UTC (07:00 Vilnius summer) and 05:00 UTC (07:00 Vilnius winter)
-    # Gate logic ensures execution only at 07:00 Europe/Vilnius weekdays
-    - cron: "0 4 * * 1-5"
-    - cron: "0 5 * * 1-5"
+    # 07:00 Europe/Vilnius across DST changes
+    - cron: "0 4 * * *"
+    - cron: "0 5 * * *"
 
 jobs:
-  run-workflow:
+  run-automation:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 60
     env:
-      GMAIL_USER: ${{ secrets.GMAIL_USER }}
-      GMAIL_PASSWORD: ${{ secrets.GMAIL_PASSWORD }}
-      RECIPIENT_EMAIL: ${{ secrets.RECIPIENT_EMAIL }}
+      # Wrapper notification credentials
+      EMAIL_USER: ${{ secrets.EMAIL_USER }}
+      EMAIL_PASS: ${{ secrets.EMAIL_PASS }}
+      TO_EMAIL: ${{ secrets.TO_EMAIL }}
+
+      # Backward compatibility for existing send_email.py
+      GMAIL_USER: ${{ secrets.EMAIL_USER }}
+      GMAIL_PASSWORD: ${{ secrets.EMAIL_PASS }}
+      RECIPIENT_EMAIL: ${{ secrets.TO_EMAIL }}
+
+      # Headless runtime flags
+      CI: "true"
+      PLAYWRIGHT_BROWSERS_PATH: ~/.cache/ms-playwright
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -24,9 +34,9 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-          cache: 'pip'
+          cache: "pip"
 
-      - name: Decide whether this scheduled run should execute
+      - name: Gate schedule to exactly 07:00 Europe/Vilnius
         id: schedule_gate
         shell: bash
         run: |
@@ -37,16 +47,15 @@ jobs:
 
           local_hour="$(TZ=Europe/Vilnius date +%H)"
           local_minute="$(TZ=Europe/Vilnius date +%M)"
-          local_weekday="$(TZ=Europe/Vilnius date +%u)"
 
-          if [[ "$local_weekday" -le 5 && "$local_hour" == "07" && "$local_minute" == "00" ]]; then
+          if [[ "$local_hour" == "07" && "$local_minute" == "00" ]]; then
             echo "run=true" >> "$GITHUB_OUTPUT"
           else
             echo "run=false" >> "$GITHUB_OUTPUT"
             echo "Skipping. Local Europe/Vilnius time is $(TZ=Europe/Vilnius date '+%Y-%m-%d %H:%M:%S %Z')."
           fi
 
-      - name: Create virtual environment
+      - name: Install dependencies
         if: steps.schedule_gate.outputs.run == 'true'
         shell: bash
         run: |
@@ -54,107 +63,34 @@ jobs:
           source .venv/bin/activate
           python -m pip install --upgrade pip setuptools wheel
           python -m pip install --no-cache-dir -r requirements.txt
-          python -m pip install --no-cache-dir --force-reinstall playwright-stealth==2.0.3
-          python -m pip show playwright-stealth
-          python -m pip list | grep playwright-stealth || true
-          python -m pip list | grep playwright || true
           python -m playwright install --with-deps chromium
 
-      - name: Verify environment variables
+      - name: Validate required environment variables
         if: steps.schedule_gate.outputs.run == 'true'
         shell: bash
         run: |
-          echo "Gmail User: ${GMAIL_USER:+***}"
-          echo "Gmail Password: ${GMAIL_PASSWORD:+***}"
-          echo "Recipient Email: ${RECIPIENT_EMAIL}"
-          if [ -z "$GMAIL_USER" ] || [ -z "$GMAIL_PASSWORD" ] || [ -z "$RECIPIENT_EMAIL" ]; then
-            echo "ERROR: Missing required environment variables"
+          echo "EMAIL_USER: ${EMAIL_USER:+set}"
+          echo "EMAIL_PASS: ${EMAIL_PASS:+set}"
+          echo "TO_EMAIL: ${TO_EMAIL:+set}"
+          if [[ -z "$EMAIL_USER" || -z "$EMAIL_PASS" || -z "$TO_EMAIL" ]]; then
+            echo "ERROR: Missing required secrets: EMAIL_USER, EMAIL_PASS, TO_EMAIL"
             exit 1
           fi
 
-      - name: Run scraper pipeline
+      - name: Run automation wrapper
         if: steps.schedule_gate.outputs.run == 'true'
         shell: bash
         run: |
           source .venv/bin/activate
-          max_retries=3
-          retry_count=0
-          while [ $retry_count -lt $max_retries ]; do
-            python run_daily_pipeline.py
-            if [ $? -eq 0 ]; then
-              echo "Pipeline succeeded"
-              exit 0
-            fi
-            retry_count=$((retry_count + 1))
-            if [ $retry_count -lt $max_retries ]; then
-              echo "Pipeline failed, retrying in 30 seconds (attempt $((retry_count + 1))/$max_retries)..."
-              sleep 30
-            fi
-          done
-          echo "Pipeline failed after $max_retries attempts"
-          ls -lah *.xlsx 2>/dev/null || echo "No Excel files found"
-          exit 1
+          python main_wrapper.py
 
-      - name: Verify output files
-        if: steps.schedule_gate.outputs.run == 'true'
-        shell: bash
-        run: |
-          echo "Checking for generated Excel files..."
-          ls -lah pension_data_combined_*.xlsx || echo "ERROR: No merged Excel file found"
-          ls -lah *_data_*.xlsx | head -10 || echo "No scraper output files found"
-
-      - name: Verify playwright-stealth import
-        if: steps.schedule_gate.outputs.run == 'true'
-        shell: bash
-        run: |
-          source .venv/bin/activate
-          python -c "import playwright_stealth; print('playwright-stealth import ok')" || echo "playwright-stealth import FAILED"
-
-      - name: Upload generated workbook
-        if: steps.schedule_gate.outputs.run == 'true' && success()
+      - name: Upload logs and generated files
+        if: steps.schedule_gate.outputs.run == 'true' && always()
         uses: actions/upload-artifact@v4
         with:
-          name: pension-workbook
-          path: pension_data_combined_*.xlsx
-          if-no-files-found: error
-
-      - name: Send email with attachment
-        if: steps.schedule_gate.outputs.run == 'true' && success()
-        shell: bash
-        run: |
-          source .venv/bin/activate
-          max_retries=3
-          retry_count=0
-          while [ $retry_count -lt $max_retries ]; do
-            python send_email.py
-            if [ $? -eq 0 ]; then
-              echo "Email sent successfully"
-              exit 0
-            fi
-            retry_count=$((retry_count + 1))
-            if [ $retry_count -lt $max_retries ]; then
-              echo "Email send failed, retrying in 30 seconds (attempt $((retry_count + 1))/$max_retries)..."
-              sleep 30
-            fi
-          done
-          echo "Failed to send email after $max_retries attempts"
-          exit 1
-
-      - name: Print pipeline logs on failure
-        if: steps.schedule_gate.outputs.run == 'true' && failure()
-        shell: bash
-        run: |
-          echo "=== PIPELINE FAILED ==="
-          echo "Checking for generated files..."
-          ls -lah *.xlsx 2>/dev/null || echo "No Excel files found"
-          echo ""
-          echo "Checking sources directory..."
-          ls -lah sources/ | head -20
-          echo ""
-          echo "Checking Python version..."
-          python --version
-          echo ""
-          echo "Checking Playwright installation..."
-          source .venv/bin/activate
-          python -c "import playwright; print(f'Playwright version: {playwright.__version__}')" || echo "Playwright not properly installed"
-          python -c "import playwright_stealth; print('playwright-stealth imported')" || echo "playwright-stealth not installed or import failed"
+          name: automation-artifacts
+          path: |
+            logs/*.log
+            *_data_*.xlsx
+            pension_data_combined_*.xlsx
+          if-no-files-found: warn
