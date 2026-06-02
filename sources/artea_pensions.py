@@ -133,6 +133,17 @@ class ArteaPensionsScraper(BaseScraper):
 
     def wait_for_page_ready(self, page):
         """Wait for the page JS to finish rendering the custom-select widget."""
+        # Check for Cloudflare challenge early
+        print("    Checking for Cloudflare security challenge...")
+        page.wait_for_timeout(3000)  # Give page time to load
+        
+        page_text = page.evaluate("() => document.body.innerText || ''")
+        if "Saugumo patvirtinimo" in page_text or "Ray ID" in page_text or "security challenge" in page_text:
+            print("    ⚠️  Cloudflare security challenge detected!")
+            print("    This is a third-party service limitation (GitHub Actions detected as bot).")
+            print("    Pipeline will continue with previously cached Artea data.")
+            raise RuntimeError("Cloudflare security challenge: Cannot scrape in CI headless environment")
+        
         # Step 1: accept cookies so the widget is not blocked by the modal overlay
         print("    Dismissing cookie consent modal...")
         for attempt in range(3):
@@ -140,22 +151,19 @@ class ArteaPensionsScraper(BaseScraper):
             page.wait_for_timeout(800)
         
         # Step 2: wait for the actual custom-select element to exist in DOM
-        # Retry multiple times with increasing waits for CI environments
         print("    Waiting for fund selector to appear in DOM...")
-        for attempt in range(5):
-            try:
-                page.wait_for_selector(".custom-select-opener", timeout=15000)
-                print("    ✓ Fund selector found in DOM")
-                break
-            except Exception as e:
-                if attempt < 4:
-                    print(f"    Attempt {attempt + 1}/5: Selector not found, retrying in 2s...")
-                    page.wait_for_timeout(2000)
-                else:
-                    # Last attempt failed, throw error with debug info
-                    debug_text = page.evaluate("() => document.body.innerText.substring(0, 500)")
-                    print(f"    DEBUG page text: {debug_text[:200]}")
-                    raise RuntimeError(f"Fund selector never appeared in DOM after 5 attempts: {e}")
+        try:
+            page.wait_for_selector(".custom-select-opener", timeout=15000)
+            print("    ✓ Fund selector found in DOM")
+        except Exception as e:
+            # Check again if it's Cloudflare blocking
+            page_text = page.evaluate("() => document.body.innerText || ''")
+            if "Saugumo patvirtinimo" in page_text or "Ray ID" in page_text:
+                print("    ⚠️  Cloudflare security challenge detected!")
+                print("    Pipeline will continue with previously cached Artea data.")
+                raise RuntimeError("Cloudflare security challenge: Cannot scrape in CI headless environment")
+            
+            raise RuntimeError(f"Fund selector never appeared in DOM after retries: {e}")
         
         # Step 3: make sure cookie overlay is fully gone
         try:
