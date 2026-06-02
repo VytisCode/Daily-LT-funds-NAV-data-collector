@@ -20,6 +20,9 @@ EXCLUDED_FUNDS = {
     "Luminor ateitis akcijų index",
 }
 
+# Known Luminor II pillar fund IDs for the current live page.
+LUMINOR_II_FUND_IDS = ["15", "16", "17", "18", "19", "20", "23", "21"]
+
 
 class LuminorPensionsScraper(BaseScraper):
     """Scrapes Luminor II pillar pension fund table."""
@@ -80,22 +83,12 @@ class LuminorPensionsScraper(BaseScraper):
     def scrape_data(self, page) -> list:
         results = []
 
-        # First attempt: new layout uses query parameters to load each fund's live JS state.
+        # First attempt: load known II-pillar fund pages directly by fund ID.
         try:
             self.dismiss_cookie_modal(page)
-            options = page.evaluate(
-                '''Array.from(document.querySelectorAll('select#edit-fund option')).map(option => ({
-                    value: option.value,
-                    title: option.innerText.trim(),
-                }))'''
-            )
             found = 0
-            for option in options:
-                title = option.get('title')
-                if title in EXCLUDED_FUNDS:
-                    continue
-
-                fund_url = f"{self.get_url()}?fund_type=pension&fund={option.get('value')}&currency=eur&period=3year"
+            for fund_id in LUMINOR_II_FUND_IDS:
+                fund_url = f"{self.get_url()}?fund_type=pension&fund={fund_id}&currency=eur&period=3year"
                 page.goto(fund_url, wait_until='networkidle', timeout=120000)
                 self.dismiss_cookie_modal(page)
 
@@ -120,7 +113,7 @@ class LuminorPensionsScraper(BaseScraper):
                     continue
 
                 results.append({
-                    "Fund name": fund_rates.get('name_alias_lt', title),
+                    "Fund name": fund_rates.get('name_alias_lt'),
                     "Data": data_date,
                     "Vieneto vertė": unit_value,
                     "Grynieji aktyvai": net_assets,
