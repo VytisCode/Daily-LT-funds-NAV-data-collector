@@ -125,5 +125,38 @@ Automated Python Script
         print(f"❌ Error sending email: {e}")
         sys.exit(1)
 
+
+def send_notification_email(subject: str, body: str) -> bool:
+    """Send a plain-text notification email using the configured Gmail credentials."""
+    recipients = [addr.strip() for addr in (RECIPIENT_EMAIL or "").split(",") if addr.strip()]
+
+    if not GMAIL_USER:
+        print("Notification email skipped: GMAIL_USER not set")
+        return False
+    if not GMAIL_PASSWORD:
+        print("Notification email skipped: GMAIL_PASSWORD not set")
+        return False
+    if not recipients:
+        print("Notification email skipped: RECIPIENT_EMAIL not set")
+        return False
+
+    try:
+        msg = MIMEText(body, "plain", "utf-8")
+        msg["From"] = GMAIL_USER
+        msg["To"] = ", ".join(recipients)
+        msg["Date"] = formatdate(localtime=True)
+        msg["Subject"] = subject
+
+        with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
+            server.login(GMAIL_USER, GMAIL_PASSWORD)
+            server.send_message(msg, to_addrs=recipients)
+
+        print(f"✅ Notification email sent to {', '.join(recipients)}")
+        return True
+    except Exception as e:
+        print(f"❌ Error sending notification email: {e}")
+        return False
+
+
 if __name__ == "__main__":
     send_email()

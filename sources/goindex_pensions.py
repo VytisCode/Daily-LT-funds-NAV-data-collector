@@ -4,26 +4,139 @@ Goindex pension funds scraper.
 Extracts II pillar fund data from a static table.
 Table columns: fund name, 1d%, 1m%, 3m%, 1y%, 3y%, unit value, net assets, equity%
 """
+import json
+import os
 import re
 import sys
+import urllib.error
+import urllib.parse
+import urllib.request
 from datetime import datetime
 from pathlib import Path
+
+import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from base_scraper import BaseScraper
+from send_email import send_notification_email
 
 
 class GoindexPensionsScraper(BaseScraper):
     """Scrapes Goindex II pillar pension fund table."""
 
     URL = "https://www.goindex.lt/2-pakopa/fondu-rezultatai-ir-dokumentai/"
+    API_SUMMARY_URL = "https://dapi.goindex.lt/v1/funds/summary/tab"
+    DEFAULT_SECRET_KEY = "TiLnbKRfNniC4Udl8zCuYj2IjFoonGws8H231bdpgl4BAadjdr"
+    FUND_CODE_MAP = {
+        "GOX-03/09": "Goindex pensija 2003-2009",
+        "GOX-54/60": "Goindex pensija 1954-1960",
+        "GOX-61/67": "Goindex pensija 1961-1967",
+        "GOX-68/74": "Goindex pensija 1968-1974",
+        "GOX-75/81": "Goindex pensija 1975-1981",
+        "GOX-82/88": "Goindex pensija 1982-1988",
+        "GOX-89/95": "Goindex pensija 1989-1995",
+        "GOX-96/02": "Goindex pensija 1996-2002",
+        "GOX-TIPF": "Goindex pensijų turto išsaugojimo fondas",
+    }
 
     def __init__(self):
         super().__init__("goindex_pensions")
 
     def get_url(self) -> str:
         return self.URL
+
+    def get_api_secret_key(self) -> str:
+        return os.getenv("GOINDEX_API_SECRET_KEY", self.DEFAULT_SECRET_KEY)
+
+    def build_api_row(self, fund_code: str, record: dict) -> dict:
+        date_value = record.get("date", "")
+        if "T" in date_value:
+            date_value = date_value.split("T")[0]
+        return {
+            "Fund name": self.FUND_CODE_MAP.get(fund_code, fund_code),
+            "Data": date_value,
+            "Vieneto vertė": record.get("unitValue"),
+            "Grynieji aktyvai": record.get("assets"),
+        }
+
+    def fetch_summary_latest(self, fund_code: str) -> dict:
+        query = urllib.parse.urlencode({
+            "secret_key": self.get_api_secret_key(),
+            "code": fund_code,
+        })
+        url = f"{self.API_SUMMARY_URL}?{query}"
+        request = urllib.request.Request(
+            url,
+            headers={"User-Agent": "Mozilla/5.0", "Accept": "application/json"},
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=30) as response:
+                return json.load(response)
+        except urllib.error.HTTPError as exc:
+            body = exc.read().decode("utf-8", errors="ignore")
+            if self.is_secret_key_error(exc.code, body):
+                self.notify_secret_key_issue(exc.code, fund_code, body)
+            raise
+
+    def is_secret_key_error(self, status_code: int, body: str) -> bool:
+        body_text = (body or "").lower()
+        if status_code in {401, 403}:
+            return True
+        if status_code == 422 and "secret" in body_text:
+            return True
+        if "secret_key" in body_text or "invalid secret" in body_text or "expired" in body_text:
+            return True
+        return False
+
+    def notify_secret_key_issue(self, status_code: int, fund_code: str, response_body: str) -> None:
+        subject = "[Alert] Goindex API secret_key expired or invalid"
+        body = (
+            f"The Goindex API secret_key appears to be invalid or expired.\n"
+            f"Fund code: {fund_code}\n"
+            f"HTTP status: {status_code}\n"
+            f"API URL: {self.API_SUMMARY_URL}\n"
+            f"\n"
+            "This script will fall back to the browser scraper for Goindex data.\n"
+            "Please refresh the secret_key from the Goindex DevTools request and update the environment variable.\n"
+            f"\nResponse body:\n{response_body[:2000]}"
+        )
+        send_notification_email(subject, body)
+
+    def fetch_api_latest_data(self) -> list:
+        results = []
+        for fund_code in self.FUND_CODE_MAP:
+            try:
+                record = self.fetch_summary_latest(fund_code)
+                if record:
+                    results.append(self.build_api_row(fund_code, record))
+                    print(f"Loaded latest Goindex data for {fund_code} via API")
+                else:
+                    raise RuntimeError("Empty API record")
+            except urllib.error.HTTPError as exc:
+                print(f"Goindex API fetch failed for {fund_code}: {exc}")
+                return []
+            except Exception as exc:
+                print(f"Goindex API fetch failed for {fund_code}: {exc}")
+                return []
+        return results
+
+    def run(self):
+        try:
+            api_results = self.fetch_api_latest_data()
+            if api_results:
+                print("Using Goindex API for latest fund data")
+                df = pd.DataFrame(api_results)
+                data_date = self._extract_data_date(df)
+                filename = f"{self.source_name}_data_{data_date}.xlsx"
+                filepath = self.save_to_excel(df, filename)
+                if filepath:
+                    print(f"✅ Excel file created: {filename}")
+                return filepath
+        except Exception as exc:
+            print(f"Goindex API path failed: {exc}. Falling back to browser scraping.")
+
+        return super().run()
 
     def dismiss_cookie_modal(self, page):
         for sel in [
