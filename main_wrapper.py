@@ -59,13 +59,13 @@ def read_env(name: str, default: str | None = None, required: bool = False) -> s
 
 def send_failure_email(logger: logging.Logger, subject: str, body: str) -> None:
     try:
-        email_user = read_env("EMAIL_USER", required=True)
-        email_pass = read_env("EMAIL_PASS", required=True)
-        to_email = read_env("TO_EMAIL", required=True)
+        email_user = read_env("GMAIL_USER", required=True)
+        email_pass = read_env("GMAIL_PASS", required=True)
+        to_email = read_env("RECIPIENT_EMAIL", required=True)
 
         recipients = [addr.strip() for addr in to_email.split(",") if addr.strip()]
         if not recipients:
-            raise ValueError("TO_EMAIL has no valid recipients")
+            raise ValueError("RECIPIENT_EMAIL has no valid recipients")
 
         msg = MIMEText(body, "plain", "utf-8")
         msg["Subject"] = subject
