@@ -5,7 +5,6 @@ Extracts II pillar fund data from a simple static table.
 """
 import re
 import sys
-import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -119,26 +118,6 @@ class LuminorPensionsScraper(BaseScraper):
         print(f"  Data date: {data_date}")
 
         print(f"  Found {len(rows)} table rows")
-
-        # If we couldn't find a reasonable number of rows, dump page HTML and screenshot
-        # to help debugging in CI (upload artifacts from workflow).
-        if len(rows) < 6:
-            try:
-                dump_dir = Path("artifacts")
-                dump_dir.mkdir(exist_ok=True)
-                dump_html = dump_dir / f"luminor_page_dump_{int(time.time())}.html"
-                content = page.content()
-                dump_html.write_text(content, encoding="utf-8")
-                print(f"  Wrote page HTML dump to {dump_html}")
-            except Exception as e:
-                print("  Failed to write HTML dump:", e)
-
-            try:
-                screenshot_path = dump_dir / f"luminor_page_screenshot_{int(time.time())}.png"
-                page.screenshot(path=str(screenshot_path), full_page=True)
-                print(f"  Wrote screenshot to {screenshot_path}")
-            except Exception as e:
-                print("  Failed to write screenshot:", e)
 
         for row in rows:
             cells = row.query_selector_all("td")
