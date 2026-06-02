@@ -8,10 +8,6 @@ import sys
 from pathlib import Path
 
 from playwright.sync_api import sync_playwright
-try:
-    import playwright_stealth as pw_stealth
-except ImportError:
-    pw_stealth = None
 
 # Add parent directory to path so we can import base_scraper
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -59,26 +55,10 @@ class ArteaPensionsScraper(BaseScraper):
             user_agent=self.USER_AGENT,
             locale="lt-LT",
             timezone_id="Europe/Vilnius",
-            extra_http_headers={
-                "Accept-Language": "lt-LT,lt;q=0.9,en;q=0.8",
-                "Referer": "https://www.google.com/",
-            },
         )
         self.page = context.new_page()
-        self.page.set_default_timeout(45000)
-        
-        # Apply stealth measures if available
-        if pw_stealth and hasattr(pw_stealth, "Stealth"):
-            print("  Applying Playwright stealth measures...")
-            pw_stealth.Stealth().apply_stealth_sync(self.page)
-        else:
-            print("  Warning: playwright-stealth not installed or import failed. Install with: pip install playwright-stealth")
-        
         self.page.add_init_script(
-            "Object.defineProperty(navigator, 'webdriver', {get: () => undefined});"
-            "Object.defineProperty(navigator, 'languages', {get: () => ['lt-LT','lt','en-US','en']});"
-            "Object.defineProperty(navigator, 'plugins', {get: () => [1,2,3,4,5]});"
-            "window.navigator.chrome = { runtime: {} };"
+            "Object.defineProperty(navigator, 'webdriver', {get: () => undefined})"
         )
         return self.page
 
@@ -90,42 +70,56 @@ class ArteaPensionsScraper(BaseScraper):
 
     def dismiss_cookie_modal(self, page):
         """Dismiss OneTrust modal/panel that can block clicks."""
-        # Use JavaScript to aggressively dismiss and hide all consent modals
-        page.evaluate("""() => {
-            // Try to click accept button - use valid CSS selectors only
-            const buttons = [
-                document.getElementById('onetrust-accept-btn-handler'),
-                document.querySelector('.onetrust-close-btn-handler'),
-                document.querySelector('[data-testid="cookie-accept-button"]'),
-                document.querySelector("button[id*='accept']"),
-                // Find button by text content (without :has-text which is Playwright-only)
-                Array.from(document.querySelectorAll('button')).find(b => 
-                    (b.innerText || '').includes('Leisti') || (b.innerText || '').includes('Accept') || (b.innerText || '').includes('Patvirt')
-                ),
-            ].filter(Boolean);
+        # First pass: try common dismiss buttons
+        selectors = [
+            "button:has-text('Leisti visus')",
+            "button:has-text('Allow All')",
+            "#onetrust-accept-btn-handler",
+            "button:has-text('Patvirt')",  # Patvirtinti...
+            "#onetrust-reject-all-handler",
+            "button:has-text('Uždaryti')",
+            ".onetrust-close-btn-handler",
+        ]
+
+        for attempt in range(2):
+            for selector in selectors:
+                try:
+                    btn = page.locator(selector).first
+                    if btn.count() > 0:
+                        btn.click(timeout=2000, force=True)
+                        page.wait_for_timeout(300)
+                        # Check if modal overlay is gone
+                        try:
+                            page.wait_for_selector(".onetrust-pc-dark-filter", state="hidden", timeout=2000)
+                        except:
+                            pass
+                        return
+                except Exception:
+                    pass
             
-            for (let btn of buttons) {
-                try {
-                    btn.click();
-                } catch(e) {}
-            }
+            # If first pass failed, try using evaluate to click the button directly
+            try:
+                result = page.evaluate("""() => {
+                    const btn = document.querySelector("button[id*='onetrust'][id*='accept']") ||
+                               Array.from(document.querySelectorAll('button'))
+                                 .find(b => b.innerText.includes('Leisti') || b.innerText.includes('Allow'));
+                    if (btn) {
+                        btn.click();
+                        return true;
+                    }
+                    return false;
+                }""")
+                if result:
+                    page.wait_for_timeout(500)
+                    try:
+                        page.wait_for_selector(".onetrust-pc-dark-filter", state="hidden", timeout=2000)
+                    except:
+                        pass
+                    return
+            except:
+                pass
             
-            // Force hide overlay
-            const overlay = document.querySelector('.onetrust-pc-dark-filter') ||
-                           document.getElementById('onetrust-consent-sdk');
-            if (overlay) {
-                overlay.style.display = 'none';
-                overlay.style.visibility = 'hidden';
-                overlay.style.zIndex = '-9999';
-                overlay.style.pointerEvents = 'none';
-            }
-            
-            // Remove modal from DOM if still present
-            try {
-                document.getElementById('onetrust-consent-sdk')?.remove();
-            } catch(e) {}
-        }""")
-        page.wait_for_timeout(300)
+            page.wait_for_timeout(300)
 
     def extract_first_match(self, text: str, pattern: str) -> str:
         match = re.search(pattern, text, flags=re.IGNORECASE)
@@ -139,79 +133,25 @@ class ArteaPensionsScraper(BaseScraper):
 
     def wait_for_page_ready(self, page):
         """Wait for the page JS to finish rendering the custom-select widget."""
-        print("    Waiting for page to stabilize...")
+        # Step 1: accept cookies so the widget is not blocked by the modal overlay
+        self.dismiss_cookie_modal(page)
         
-        # Check for Cloudflare challenge page
-        print("    Checking for Cloudflare security challenge...")
-        page.wait_for_timeout(5000)  # Give Cloudflare time to load dynamic content
-        
-        cf_challenge = page.evaluate("""() => {
-            const text = document.body.innerText || '';
-            return text.includes('Saugumo patvirtinimo') || 
-                   text.includes('security challenge') ||
-                   text.includes('Ray ID');
-        }""")
-        
-        if cf_challenge:
-            print("    ⚠️  Cloudflare security challenge detected!")
-            print("    Waiting up to 60s for Cloudflare to verify...")
-            try:
-                # Wait for the challenge to complete by checking if the page content changes
-                page.wait_for_function("""() => {
-                    const text = document.body.innerText || '';
-                    return !text.includes('Saugumo patvirtinimo') && 
-                           !text.includes('Ray ID') &&
-                           document.querySelectorAll('.custom-select-opener').length > 0;
-                }""", timeout=60000)
-                print("    ✓ Cloudflare challenge completed")
-            except Exception as e:
-                print(f"    ✗ Cloudflare challenge not bypassed: {e}")
-                raise RuntimeError("Cloudflare security challenge could not be bypassed in headless mode")
-        
-        # Step 1: Aggressively dismiss cookie modal
-        print("    Dismissing cookie consent modal...")
-        for attempt in range(3):
-            self.dismiss_cookie_modal(page)
-            page.wait_for_timeout(500)
-            
-            # Check if overlay is gone
-            overlay_gone = page.evaluate("""() => {
-                const overlay = document.querySelector('.onetrust-pc-dark-filter') ||
-                               document.getElementById('onetrust-consent-sdk');
-                return !overlay || window.getComputedStyle(overlay).display === 'none';
-            }""")
-            if overlay_gone:
-                print("    ✓ Cookie modal dismissed")
-                break
-        
-        # Step 2: Wait for the custom-select element to exist in DOM
+        # Step 2: wait for the actual custom-select element to exist in DOM
+        # This is the key step missing in CI — the widget renders AFTER cookies accepted
         print("    Waiting for fund selector to appear in DOM...")
-        selector_found = False
-        for attempt in range(3):
-            try:
-                page.wait_for_selector(".custom-select-opener", timeout=10000)
-                selector_found = True
-                print("    ✓ Fund selector found in DOM")
-                break
-            except Exception:
-                if attempt < 2:
-                    print(f"    Selector not found (attempt {attempt + 1}/3), retrying...")
-                    page.wait_for_timeout(1000)
-                else:
-                    print("    ✗ Fund selector not found after 3 attempts")
+        try:
+            page.wait_for_selector(".custom-select-opener", timeout=30000)
+            print("    ✓ Fund selector found in DOM")
+        except Exception:
+            raise RuntimeError("Fund selector never appeared in DOM after 30s")
         
-        if not selector_found:
-            # Debug: check what's actually on the page
-            debug_info = page.evaluate("""() => {
-                return {
-                    hasOverlay: !!document.querySelector('.onetrust-pc-dark-filter'),
-                    hasSelector: !!document.querySelector('.custom-select-opener'),
-                    bodyText: document.body.innerText.substring(0, 300)
-                };
-            }""")
-            raise RuntimeError(
-                f"Fund selector never appeared. Debug: {debug_info}"
-            )
+        # Step 3: make sure cookie overlay is fully gone
+        try:
+            page.wait_for_selector("#onetrust-consent-sdk", state="hidden", timeout=5000)
+        except Exception:
+            # Force-remove the overlay via JS
+            page.evaluate("document.getElementById('onetrust-consent-sdk')?.remove()")
+            page.wait_for_timeout(300)
 
     def open_fund_selector(self, page):
         """Click the fund dropdown to open it."""
@@ -302,7 +242,6 @@ class ArteaPensionsScraper(BaseScraper):
             "Data": self.extract_first_match(text, r"Data\s+(\d{4}-\d{2}-\d{2})"),
             "Vieneto vertė": self.extract_first_match(text, r"Vieneto vertė\s+([0-9\s.,]+\s*EUR)"),
             "Grynieji aktyvai": self.extract_first_match(text, r"Grynieji aktyvai\s+([0-9\s.,]+\s*EUR)"),
-            
         }
 
     def scrape_data(self, page) -> list:
