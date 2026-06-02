@@ -12,15 +12,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 60
     env:
-      # Wrapper notification credentials
-      EMAIL_USER: ${{ secrets.EMAIL_USER }}
-      EMAIL_PASS: ${{ secrets.EMAIL_PASS }}
-      TO_EMAIL: ${{ secrets.TO_EMAIL }}
-
-      # Backward compatibility for existing send_email.py
-      GMAIL_USER: ${{ secrets.EMAIL_USER }}
-      GMAIL_PASSWORD: ${{ secrets.EMAIL_PASS }}
-      RECIPIENT_EMAIL: ${{ secrets.TO_EMAIL }}
+      # Pipeline and notification credentials
+      GMAIL_USER: ${{ secrets.GMAIL_USER }}
+      GMAIL_PASSWORD: ${{ secrets.GMAIL_PASSWORD }}
+      RECIPIENT_EMAIL: ${{ secrets.RECIPIENT_EMAIL }}
 
       # Headless runtime flags
       CI: "true"
@@ -69,11 +64,11 @@ jobs:
         if: steps.schedule_gate.outputs.run == 'true'
         shell: bash
         run: |
-          echo "EMAIL_USER: ${EMAIL_USER:+set}"
-          echo "EMAIL_PASS: ${EMAIL_PASS:+set}"
-          echo "TO_EMAIL: ${TO_EMAIL:+set}"
-          if [[ -z "$EMAIL_USER" || -z "$EMAIL_PASS" || -z "$TO_EMAIL" ]]; then
-            echo "ERROR: Missing required secrets: EMAIL_USER, EMAIL_PASS, TO_EMAIL"
+          echo "GMAIL_USER: ${GMAIL_USER:+set}"
+          echo "GMAIL_PASSWORD: ${GMAIL_PASSWORD:+set}"
+          echo "RECIPIENT_EMAIL: ${RECIPIENT_EMAIL:+set}"
+          if [[ -z "$GMAIL_USER" || -z "$GMAIL_PASSWORD" || -z "$RECIPIENT_EMAIL" ]]; then
+            echo "ERROR: Missing required secrets: GMAIL_USER, GMAIL_PASSWORD, RECIPIENT_EMAIL"
             exit 1
           fi
 
