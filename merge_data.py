@@ -182,6 +182,10 @@ def main():
     print("\nCombining all institutions into one table...")
     df_combined = pd.concat(institution_frames, ignore_index=True, sort=False)
 
+    # Exclude closed legacy funds that should no longer appear in reports.
+    if "Fund name" in df_combined.columns:
+        df_combined = df_combined[~df_combined["Fund name"].astype(str).str.contains(r"1954-1960|54/60", case=False, regex=True)]
+
     # Consolidate equivalent columns from different sources:
     # Date (Swedbank) -> Data
     if "Date" in df_combined.columns:
@@ -217,10 +221,25 @@ def main():
             .fillna(len(PROVIDER_ORDER))
         )
         df_combined.sort_values(
-            ["_bucket_order", "_provider_order", "Fund name"],
+            ["_provider_order", "_bucket_order", "Fund name"],
             ignore_index=True,
             inplace=True,
         )
+
+        # Insert a provider header row before each provider block.
+        if "_institution" in df_combined.columns:
+            block_rows = []
+            current_provider = None
+            for _, row in df_combined.iterrows():
+                provider = str(row.get("_institution", ""))
+                if provider != current_provider:
+                    current_provider = provider
+                    separator = {col: "" for col in df_combined.columns}
+                    separator["Fund name"] = f"{provider.upper()}"
+                    block_rows.append(separator)
+                block_rows.append(row.to_dict())
+            df_combined = pd.DataFrame(block_rows)
+
         df_combined.drop(columns=["_bucket_order", "_provider_order", "_institution"], inplace=True, errors="ignore")
 
     # Normalise Data column to YYYY-MM-DD (replace spaces/slashes with dashes)

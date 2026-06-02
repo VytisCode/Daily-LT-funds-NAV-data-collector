@@ -38,7 +38,6 @@ class ArteaPensionsScraper(BaseScraper):
     API_HISTORY_URL = "https://api.sb.lt/funds-api/Prices/History"
     FUND_CODE_MAP = {
         "INV-03/09": "Artea pensija 2003-2009",
-        "INV-54/60": "Artea pensija 1954-1960",
         "INV-61/67": "Artea pensija 1961-1967",
         "INV-68/74": "Artea pensija 1968-1974",
         "INV-75/81": "Artea pensija 1975-1981",

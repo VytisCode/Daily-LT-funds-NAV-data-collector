@@ -30,7 +30,6 @@ class GoindexPensionsScraper(BaseScraper):
     DEFAULT_SECRET_KEY = "TiLnbKRfNniC4Udl8zCuYj2IjFoonGws8H231bdpgl4BAadjdr"
     FUND_CODE_MAP = {
         "GOX-03/09": "Goindex pensija 2003-2009",
-        "GOX-54/60": "Goindex pensija 1954-1960",
         "GOX-61/67": "Goindex pensija 1961-1967",
         "GOX-68/74": "Goindex pensija 1968-1974",
         "GOX-75/81": "Goindex pensija 1975-1981",
@@ -246,6 +245,8 @@ class GoindexPensionsScraper(BaseScraper):
 
             fund_name = " ".join(cells[0].inner_text().split())
             if not fund_name or not fund_name.startswith("Goindex"):
+                continue
+            if "1954-1960" in fund_name or "54/60" in fund_name:
                 continue
 
             unit_value = cells[6].inner_text().strip()
