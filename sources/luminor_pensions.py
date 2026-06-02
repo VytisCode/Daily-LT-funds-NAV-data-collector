@@ -27,6 +27,39 @@ class LuminorPensionsScraper(BaseScraper):
     def __init__(self):
         super().__init__("luminor_pensions")
 
+    def setup_browser(self):
+        """Use a more realistic browser fingerprint for Luminor to avoid bot blocking."""
+        from playwright.sync_api import sync_playwright
+
+        print("Starting browser (Luminor-specific settings)...")
+        self._playwright = sync_playwright().start()
+        self.browser = self._playwright.chromium.launch(
+            headless=self._is_headless(),
+            args=[
+                "--disable-blink-features=AutomationControlled",
+                "--disable-dev-shm-usage",
+                "--no-sandbox",
+                "--disable-gpu",
+            ],
+        )
+        context = self.browser.new_context(
+            user_agent=(
+                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/124.0.0.0 Safari/537.36"
+            ),
+            locale="lt-LT",
+            timezone_id="Europe/Vilnius",
+        )
+        self.page = context.new_page()
+        try:
+            self.page.add_init_script(
+                "Object.defineProperty(navigator, 'webdriver', {get: () => undefined})"
+            )
+        except Exception:
+            pass
+        return self.page
+
     def get_url(self) -> str:
         return "https://www.luminor.lt/lt/pensiju-fondai"
 
@@ -47,26 +80,30 @@ class LuminorPensionsScraper(BaseScraper):
         results = []
 
         rows = []
-        for attempt in range(1, 4):
+        # Target the specific table with aria-describedby for more robust selection.
+        table_selector = 'table[aria-describedby="funds-table-label"] tbody tr'
+        for attempt in range(1, 5):
             page.wait_for_load_state("domcontentloaded")
             self.dismiss_cookie_modal(page)
 
-            # Luminor table can render asynchronously and sometimes appears late on CI.
             try:
-                page.wait_for_selector("table td", timeout=30000)
+                page.wait_for_selector(table_selector, timeout=45000)
             except Exception:
                 pass
 
-            rows = page.query_selector_all("table tr")
+            rows = page.query_selector_all(table_selector)
             print(f"  Attempt {attempt}: found {len(rows)} table rows")
 
-            if len(rows) >= 8:
+            if len(rows) >= 6:
                 break
 
-            if attempt < 3:
+            if attempt < 4:
                 print("  Luminor table not ready yet, retrying...")
-                page.wait_for_timeout(2500)
-                page.reload(wait_until="domcontentloaded", timeout=60000)
+                page.wait_for_timeout(3000)
+                try:
+                    page.reload(wait_until="domcontentloaded", timeout=60000)
+                except Exception:
+                    pass
 
         # Extract date shown above the table
         data_date = None
