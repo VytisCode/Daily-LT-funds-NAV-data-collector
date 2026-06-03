@@ -151,29 +151,56 @@ class LuminorPensionsScraper(BaseScraper):
             print("  Runtime selector parse failed:", e)
 
         # Fallback: legacy table scraping (old layout)
+        print("  Attempting legacy table scraping...")
         rows = []
-        table_selector = 'table[aria-describedby="funds-table-label"] tbody tr'
+        
+        # Try multiple table selectors as page structure may have changed
+        table_selectors = [
+            'table[aria-describedby="funds-table-label"] tbody tr',  # Original selector
+            'table tbody tr',  # Generic table rows
+            'tr[data-fund-id]',  # Data attribute selector
+            '.funds-table tbody tr',  # Class-based selector
+        ]
+        
         for attempt in range(1, 4):
             page.wait_for_load_state("domcontentloaded")
             self.dismiss_cookie_modal(page)
 
-            try:
-                page.wait_for_selector(table_selector, timeout=30000)
-            except Exception:
-                pass
-
-            rows = page.query_selector_all(table_selector)
-            print(f"  Attempt {attempt}: found {len(rows)} table rows (legacy)")
+            rows = []
+            for selector in table_selectors:
+                try:
+                    page.wait_for_selector(selector, timeout=10000)
+                    found_rows = page.query_selector_all(selector)
+                    if found_rows:
+                        rows = found_rows
+                        print(f"  Attempt {attempt}: found {len(rows)} table rows using selector: {selector}")
+                        break
+                except Exception:
+                    pass
 
             if len(rows) >= 6:
                 break
 
-            if attempt < 3:
+            if attempt < 3 and not rows:
                 page.wait_for_timeout(2000)
                 try:
                     page.reload(wait_until="domcontentloaded", timeout=60000)
                 except Exception:
                     pass
+
+        if not rows:
+            # Debug: save page snapshot and HTML for inspection
+            print("  No table rows found. Attempting to extract fund info from page content...")
+            try:
+                all_tables = page.query_selector_all("table")
+                print(f"  Found {len(all_tables)} total tables on page")
+                
+                # Try to find any text matching fund names
+                body_text = page.inner_text("body")
+                if "Luminor" in body_text:
+                    print("  Page contains 'Luminor' text")
+            except Exception as e:
+                print(f"  Error inspecting page: {e}")
 
         # Extract date shown above the table
         data_date = None
@@ -188,23 +215,27 @@ class LuminorPensionsScraper(BaseScraper):
         print(f"  Data date: {data_date}")
 
         for row in rows:
-            cells = row.query_selector_all("td")
-            if len(cells) < 4:
+            try:
+                cells = row.query_selector_all("td")
+                if len(cells) < 4:
+                    continue
+
+                fund_name = cells[0].inner_text().strip()
+                if not fund_name or fund_name in EXCLUDED_FUNDS:
+                    continue
+
+                unit_value = cells[1].inner_text().strip().replace("EUR", "").strip()
+                net_assets = cells[3].inner_text().strip()
+
+                results.append({
+                    "Fund name": fund_name,
+                    "Data": data_date,
+                    "Vieneto vertė": unit_value,
+                    "Grynieji aktyvai": net_assets,
+                })
+            except Exception as e:
+                print(f"  Error parsing row: {e}")
                 continue
-
-            fund_name = cells[0].inner_text().strip()
-            if not fund_name or fund_name in EXCLUDED_FUNDS:
-                continue
-
-            unit_value = cells[1].inner_text().strip().replace("EUR", "").strip()
-            net_assets = cells[3].inner_text().strip()
-
-            results.append({
-                "Fund name": fund_name,
-                "Data": data_date,
-                "Vieneto vertė": unit_value,
-                "Grynieji aktyvai": net_assets,
-            })
 
         return results
 
