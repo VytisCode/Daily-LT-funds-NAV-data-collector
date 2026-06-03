@@ -7,7 +7,7 @@ Features:
 - Logs steps and errors to console and logs/main_wrapper.log.
 - Sends an email notification if all attempts fail.
 - Uses environment variables for credentials:
-  EMAIL_USER, EMAIL_PASS, TO_EMAIL
+  GMAIL_USER, GMAIL_PASSWORD, RECIPIENT_EMAIL
 """
 
 from __future__ import annotations
@@ -60,7 +60,7 @@ def read_env(name: str, default: str | None = None, required: bool = False) -> s
 def send_failure_email(logger: logging.Logger, subject: str, body: str) -> None:
     try:
         email_user = read_env("GMAIL_USER", required=True)
-        email_pass = read_env("GMAIL_PASS", required=True)
+        email_pass = read_env("GMAIL_PASSWORD", required=True)
         to_email = read_env("RECIPIENT_EMAIL", required=True)
 
         recipients = [addr.strip() for addr in to_email.split(",") if addr.strip()]
