@@ -107,8 +107,17 @@ class LuminorPensionsScraper(BaseScraper):
                 except Exception:
                     pass
 
-                fund_rates = page.evaluate('window.Drupal.settings.dnbPensionFunds.fundRates')
-                fund_history = page.evaluate('window.Drupal.settings.dnbPensionFunds.fundRatesHistory')
+                try:
+                    fund_rates = page.evaluate(
+                        '(window.Drupal && window.Drupal.settings && window.Drupal.settings.dnbPensionFunds) ? window.Drupal.settings.dnbPensionFunds.fundRates : null'
+                    )
+                    fund_history = page.evaluate(
+                        '(window.Drupal && window.Drupal.settings && window.Drupal.settings.dnbPensionFunds) ? window.Drupal.settings.dnbPensionFunds.fundRatesHistory : null'
+                    )
+                except Exception as e:
+                    print(f"  Error retrieving fund data for fund {fund_id}: {e}")
+                    continue
+
                 if not fund_rates or not fund_rates.get('name_alias_lt'):
                     continue
 
